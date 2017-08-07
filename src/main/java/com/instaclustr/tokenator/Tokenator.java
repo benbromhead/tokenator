@@ -41,7 +41,7 @@ public class Tokenator {
     private static void printHelp() {
         HelpFormatter formatter = new HelpFormatter();
         formatter.printHelp("ic-tokenator <keyspace>", "Calculate non overlapping tokens for vnodes over a single keyspace", options, null);
-
+        System.exit(0);
     }
 
     public static HashSet<TokenRange> generateCandidates(final Map<Token, Set<Token>> primaryToReplicaTokens, final List<Token> ring, final Metadata metadata) {
