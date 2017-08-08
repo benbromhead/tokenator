@@ -34,8 +34,33 @@ public class Tokenator {
 
     final Multimap<InetAddress, Token> unitToTokens = HashMultimap.create();
 
-
     private static final Options options = new Options();
+
+
+    static {
+        Option optHelp = new Option(HELP_OPTION, "Display help");
+        options.addOption(optHelp);
+
+        Option optHost = new Option(HOST_OPTION, "host", true, "Host to connect to");
+        optHost.setArgName("host");
+        options.addOption(optHost);
+
+        Option optPort = new Option(PORT_OPTION, "port", true, "Port to connect to");
+        optPort.setArgName("port");
+        options.addOption(optPort);
+
+
+        Option optUsername = new Option(USERNAME_OPTION, "username", true, "Username");
+        optUsername.setArgName("username");
+        options.addOption(optUsername);
+
+        Option optPassword = new Option(PASSWORD_OPTION, "password", true, "Password");
+        optPassword.setArgName("password");
+        options.addOption(optPassword);
+
+    }
+
+
 
 
     private static void printHelp() {
