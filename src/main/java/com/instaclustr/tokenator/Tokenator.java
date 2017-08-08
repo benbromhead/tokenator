@@ -18,6 +18,7 @@ import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 public class Tokenator {
     private static final Logger logger = LoggerFactory.getLogger(Tokenator.class);
@@ -57,7 +58,6 @@ public class Tokenator {
         Option optPassword = new Option(PASSWORD_OPTION, "password", true, "Password");
         optPassword.setArgName("password");
         options.addOption(optPassword);
-
     }
 
 
@@ -69,22 +69,36 @@ public class Tokenator {
         System.exit(0);
     }
 
+    public static long getTokenRangeSize(TokenRange tr) {
+        return tr.unwrap()
+                .stream()
+                .map(trr -> Math.sqrt(((long) trr.getEnd().getValue() - (long) trr.getStart().getValue())^2))
+                .reduce(0.0, Double::sum).longValue();
+    }
+
     public static HashSet<TokenRange> generateCandidates(final Map<Token, Set<Token>> primaryToReplicaTokens, final List<Token> ring, final Metadata metadata) {
         HashSet<TokenRange> candidateTokens = new HashSet<>();
         HashSet<Token> tokensWithRangeMovements = new HashSet<>();
+        List<TokenRange> orderedTokenRanges = IntStream.range(0, ring.size()).boxed()
+                .map(i -> metadata.newTokenRange(ring.get(i) , ring.get((i + 1) % ring.size())))
+                .sorted(Comparator.comparing(Tokenator::getTokenRangeSize, Comparator.reverseOrder()))
+                .collect(Collectors.toList());
 
-        int index = 0;
-        for (com.datastax.driver.core.Token key : ring) {
-            if(tokensWithRangeMovements.contains(key) || primaryToReplicaTokens.get(key).stream().anyMatch(tokensWithRangeMovements::contains)) {
-                logger.trace("Arghh found clash!!! " + key);
-                index++;
-                continue;
-            }
-            candidateTokens.add(metadata.newTokenRange(key , ring.get((index + 1) % ring.size())));
-            tokensWithRangeMovements.add(key); //TODO this is probably redundant
-            tokensWithRangeMovements.addAll(primaryToReplicaTokens.get(key));
-            index++;
-        }
+        logger.info("Top 10 ranges");
+        orderedTokenRanges.subList(0, 10).forEach(tr -> logger.info("Token: {}      Size: {}", tr.getStart(), getTokenRangeSize(tr)));
+
+        Streams.forEachPair(orderedTokenRanges.stream(), // token range stream
+                IntStream.range(0, orderedTokenRanges.size()).boxed(), //stream of ints to track index
+                (tr, i) -> {
+                    if(tokensWithRangeMovements.contains(tr.getStart()) || primaryToReplicaTokens.get(tr.getStart()).stream().anyMatch(tokensWithRangeMovements::contains)) {
+                        logger.trace("Arghh found clash!!! " + tr.getStart());
+                    } else {
+                        candidateTokens.add(metadata.newTokenRange(tr.getStart() , ring.get((i + 1) % ring.size())));
+                        tokensWithRangeMovements.add(tr.getStart()); //TODO this is probably redundant
+                        tokensWithRangeMovements.addAll(primaryToReplicaTokens.get(tr.getStart()));
+                    }
+                });
+
         return candidateTokens;
     }
 
@@ -148,6 +162,9 @@ public class Tokenator {
         String keyspaceName = null;
         if (!arguments.isEmpty()) {
             keyspaceName = arguments.get(0);
+        } else {
+            logger.error("must pass arguments in");
+            printHelp();
         }
 
         AuthProvider authProvider = null;
@@ -180,14 +197,14 @@ public class Tokenator {
 
             HashSet<com.datastax.driver.core.TokenRange> candidateTokens = generateCandidates(topology.primaryToReplicaTokens, ring, metadata);
 
-            System.out.println("Found " + candidateTokens.size() + " non-overlapping tokens for bootstrapping nodes");
-            System.out.println("We can bootstrap " + candidateTokens.size() / numTokensNode + " nodes at once");
+            logger.info("Found " + candidateTokens.size() + " non-overlapping tokens for bootstrapping nodes");
+            logger.info("We can bootstrap " + candidateTokens.size() / numTokensNode + " nodes at once");
             List<com.datastax.driver.core.Token> tokens = candidateTokens.stream()
                     .map(tr -> tr.splitEvenly(1).get(0).getEnd())
                     .collect(Collectors.toList());
 
             for(int i = 0; i < tokens.size() / numTokensNode; i++) {
-                System.out.println("initial_token: " + tokens.subList(i * numTokensNode, numTokensNode + i * numTokensNode).stream().map(com.datastax.driver.core.Token::toString).collect(Collectors.joining(",")));
+                logger.info("initial_token: " + tokens.subList(i * numTokensNode, numTokensNode + i * numTokensNode).stream().map(com.datastax.driver.core.Token::toString).collect(Collectors.joining(",")));
             }
 
         } catch (Throwable t) {
@@ -199,43 +216,7 @@ public class Tokenator {
     public static Cluster connect(InetAddress address, int port, AuthProvider authProvider, boolean sslEnabled) {
         final Cluster.Builder clusterBuilder = Cluster.builder()
                 .addContactPoints(address)
-                .withPort(port)
-                .withQueryOptions(new QueryOptions()
-                        .setConsistencyLevel(ConsistencyLevel.ALL)
-                )
-                .withRetryPolicy(new RetryPolicy() {
-                    @Override
-                    public RetryDecision onReadTimeout(Statement statement, ConsistencyLevel cl, int requiredResponses, int receivedResponses, boolean dataRetrieved, int nbRetry) {
-                        return RetryDecision.rethrow();
-                    }
-
-                    @Override
-                    public RetryDecision onWriteTimeout(Statement statement, ConsistencyLevel cl, WriteType writeType, int requiredAcks, int receivedAcks, int nbRetry) {
-                        return RetryDecision.rethrow();
-                    }
-
-                    @Override
-                    public RetryDecision onUnavailable(Statement statement, ConsistencyLevel cl, int requiredReplica, int aliveReplica, int nbRetry) {
-                        return RetryDecision.rethrow();
-                    }
-
-                    @Override
-                    public RetryDecision onRequestError(Statement statement, ConsistencyLevel cl, DriverException e, int nbRetry) {
-                        return RetryDecision.rethrow();
-                    }
-
-                    @Override
-                    public void init(Cluster cluster) {
-
-                    }
-
-                    @Override
-                    public void close() {
-
-                    }
-                })
-                .withSpeculativeExecutionPolicy(NoSpeculativeExecutionPolicy.INSTANCE)
-                .withLoadBalancingPolicy(new WhiteListPolicy(DCAwareRoundRobinPolicy.builder().build(), ImmutableList.of(new InetSocketAddress(address, port))));
+                .withPort(port);
         if (authProvider != null) {
             clusterBuilder.withAuthProvider(authProvider);
         }
