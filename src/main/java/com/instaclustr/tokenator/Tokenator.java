@@ -182,6 +182,7 @@ public class Tokenator {
             Field tokenMapField = metadata.getClass().getDeclaredField("tokenMap");
             tokenMapField.setAccessible(true);
 
+            //Pull out some private fields from metadata so we don't have to make it ourselves
             Field tokenToPrimaryField = tokenMapField.get(metadata).getClass().getDeclaredField("tokenToPrimary");
             tokenToPrimaryField.setAccessible(true);
             Map<com.datastax.driver.core.Token, Host> tokenToPrimary = (Map<com.datastax.driver.core.Token, Host>) tokenToPrimaryField.get(tokenMapField.get(metadata));
@@ -203,6 +204,7 @@ public class Tokenator {
                     .map(tr -> tr.splitEvenly(1).get(0).getEnd())
                     .collect(Collectors.toList());
 
+            //Work out token allocation based on maximum number of nodes we can use with the set numTokens
             for(int i = 0; i < tokens.size() / numTokensNode; i++) {
                 logger.info("initial_token: " + tokens.subList(i * numTokensNode, numTokensNode + i * numTokensNode).stream().map(com.datastax.driver.core.Token::toString).collect(Collectors.joining(",")));
             }
